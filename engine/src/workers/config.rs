@@ -21,6 +21,14 @@ use notify::Watcher;
 use super::{registry::WorkerRegistration, traits::Worker};
 use crate::engine::Engine;
 
+const MIGRATED_BUILTIN_WORKERS: &[(&str, &str)] = &[
+    ("iii-http", "http"),
+    ("iii-cron", "cron"),
+    ("iii-queue", "queue"),
+    ("iii-state", "state"),
+    ("iii-pubsub", "pubsub"),
+];
+
 // =============================================================================
 // EngineConfig (YAML structure)
 // =============================================================================
@@ -99,8 +107,37 @@ impl EngineConfig {
         let yaml_content = Self::expand_env_vars(&yaml_content);
         let mut cfg: Self = serde_yaml::from_str(&yaml_content)
             .map_err(|e| anyhow::anyhow!("Failed to parse config file '{}': {}", path, e))?;
+        cfg.validate_migrated_worker_duplicates()?;
         cfg.ensure_builtin_daemons();
         Ok(cfg)
+    }
+
+    fn validate_migrated_worker_duplicates(&self) -> anyhow::Result<()> {
+        let worker_names: HashSet<&str> = self
+            .workers
+            .iter()
+            .chain(self.modules.iter())
+            .map(|entry| entry.name.as_str())
+            .collect();
+
+        let conflicts: Vec<String> = MIGRATED_BUILTIN_WORKERS
+            .iter()
+            .filter(|(deprecated, replacement)| {
+                worker_names.contains(deprecated) && worker_names.contains(replacement)
+            })
+            .map(|(deprecated, replacement)| {
+                format!(
+                    "- '{}' is the deprecated name for '{}', but both are present. Remove '{}' from your configuration.",
+                    deprecated, replacement, deprecated
+                )
+            })
+            .collect();
+
+        if !conflicts.is_empty() {
+            anyhow::bail!("Duplicate worker configurations:\n{}", conflicts.join("\n"));
+        }
+
+        Ok(())
     }
 
     /// Returns a config with default port and default modules (from inventory).
@@ -1217,6 +1254,54 @@ mod tests {
 
         let config = EngineConfig::config_file(path.to_str().unwrap()).unwrap();
         assert!(config.modules.is_empty());
+    }
+
+    #[test]
+    fn test_config_file_rejects_duplicate_migrated_workers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.yaml");
+
+        for (deprecated, replacement) in MIGRATED_BUILTIN_WORKERS {
+            std::fs::write(
+                &path,
+                format!("workers:\n  - name: {deprecated}\nmodules:\n  - name: {replacement}\n"),
+            )
+            .unwrap();
+
+            let error = EngineConfig::config_file(path.to_str().unwrap()).unwrap_err();
+            let message = error.to_string();
+
+            assert!(message.contains("Duplicate worker"), "{message}");
+            assert!(message.contains(deprecated), "{message}");
+            assert!(message.contains(replacement), "{message}");
+        }
+    }
+
+    #[test]
+    fn test_config_file_reports_all_duplicate_migrated_workers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.yaml");
+        std::fs::write(
+            &path,
+            "workers:\n  - name: iii-cron\n  - name: cron\n  - name: iii-queue\n  - name: queue\n",
+        )
+        .unwrap();
+
+        let error = EngineConfig::config_file(path.to_str().unwrap()).unwrap_err();
+        let message = error.to_string();
+
+        assert!(
+            message.contains("Duplicate worker configurations:"),
+            "{message}"
+        );
+        assert!(
+            message.contains("Remove 'iii-cron' from your configuration."),
+            "{message}"
+        );
+        assert!(
+            message.contains("Remove 'iii-queue' from your configuration."),
+            "{message}"
+        );
     }
 
     #[test]
