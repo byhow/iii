@@ -19,11 +19,22 @@ pub struct AddArgs {
     #[arg(value_name = "WORKER[@VERSION]|PATH", required = true, num_args = 1..)]
     pub worker_names: Vec<String>,
 
-    /// Discard the worker's config.yaml entry and recreate it from registry
-    /// defaults. Plain `add --force` would otherwise keep the entry. Only
-    /// takes effect together with --force on add.
+    /// Discard the worker's config.yaml entry and recreate it fresh
+    /// (dropping any hand-written config block), instead of keeping the
+    /// existing entry. With `add`, takes effect only together with --force;
+    /// `reinstall` applies force automatically.
     #[arg(long)]
     pub reset_config: bool,
+
+    /// Install through a RUNNING iii engine instead of editing the config
+    /// file in the current directory: connects to HOST[:PORT] (ex.
+    /// `localhost:49134`; port defaults to 49134; ws:// and wss:// URLs are
+    /// also accepted and used as-is) and invokes its worker::add. The
+    /// engine applies the add in ITS project directory, so this works from
+    /// any folder and with engines on non-default ports. Local worker PATHs
+    /// resolve on the engine host.
+    #[arg(long, value_name = "HOST[:PORT]")]
+    pub host: Option<String>,
 }
 
 #[derive(Parser, Debug)]
